@@ -1,4 +1,5 @@
 from geopy.distance import geodesic
+import os
 
 airports = "airports_short.csv"
 fixes = "fixes_short.csv"
@@ -80,3 +81,68 @@ with open(routes, "r") as file:
 
 deps = [r[0] for r in default_routes] # List of departure airports
 arrs = [r[-1] for r in default_routes] # List of arrival airports
+
+optimised_routes = []
+
+for i in range(len(deps)):
+    start = deps[i]
+    arr = arrs[i]
+    
+    start_lat, start_lon = lat(start), long(start)
+    arr_lat, arr_lon = lat(arr), long(arr)
+    
+    if start_lat is None or arr_lat is None:
+        print(f"Skipping route {start}-{arr}. Coordinates not found.")
+        continue
+    
+    total_distance = geodesic((start_lat, start_lon), (arr_lat, arr_lon))
+    candidates = []
+    
+    with open(fixes, "r") as file:
+        next(file)
+        for line in file:
+            parts = line.strip().split(';')
+            p = parts[0]
+            if len(p) == 5:
+                lat_str, lon_str = parts[1], parts[2]
+                
+                # lat
+                lat_prefix = '-' if lat_str[0] == 'W' else ''
+                p_lat = float(lat_prefix + str(int(lat_str[1:3]) + int(lat_str[3:5])/60 + int(lat_str[5:7])/3600))
+
+                # long
+                lon_prefix = '-' if lon_str[0] == 'W' else ''
+                p_lon = float(lon_prefix + str(int(lon_str[1:4]) + int(lon_str[4:6])/60 + int(lon_str[6:8])/3600))
+                
+                # check if point is within the bounding sphere of the route
+                dist_to_b = geodesic((p_lat, p_lon), (arr_lat, arr_lon))
+                if dist_to_b < total_distance:
+                    candidates.append({'id': p, 'lat': p_lat, 'lon': p_lon, 'dist_b': dist_to_b})
+    
+    # Building the route
+    current_route = [start]
+    curr_lat, curr_lon = float(start_lat), float(start_lon)
+    
+    while True:
+        best_next = None
+        min_step_dist = 999999
+        
+        curr_dist_to_dest = geodesic((curr_lat, curr_lon), (arr_lat, arr_lon))
+        
+        for p in candidates:
+            if p['id'] in current_route: continue
+            
+            if p['dist_b'] < curr_dist_to_dest:
+                step_dist = geodesic((curr_lat, curr_lon), (p['lat'], p['lon']))
+                if step_dist < min_step_dist:
+                    min_step_dist = step_dist
+                    best_next = p
+        
+        if not best_next or min_step_dist > curr_dist_to_dest:
+            break
+        current_route.append(best_next['id'])
+        curr_lat, curr_lon = best_next['lat'], best_next['lon']
+    current_route.append(arr)
+        
+    optimised_routes.append(current_route)
+    print(f"Route {i+1} optimised:{' -> '.join(current_route)}\n{'*'*20}")
