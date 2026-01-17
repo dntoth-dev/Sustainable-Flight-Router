@@ -1,199 +1,219 @@
-import os
-# import board
-# import busio
-import time
 import math
+import gc
 
-# Initialise UART
-# uart = busio.UART(board.GP16, board.GP17, baudrate=9600, timeout=0)
-# counter = 0
+# region BACKEND
 
-airports = "airports_short.csv"
-fixes = "fixes_short.csv"
-routes = "routes.csv"
+print("""
+      SUSTAINABLE-FLIGHT-ROUTER (Pico-Optimized PC Logic)
+      by dntoth-dev
+      -------------------------------------------------
+      """)
 
-# region Fetch latitude of airports/navaids
-def lat(id):
-    if len(id) == 4: # Airports have a 4 letter identifier (luckily that's an easy difference to spot lets goo)
-        icao = id
-        with open(airports, "r") as file:
-            next(file)
-            for line in file:
-                parts = line.strip().split(';')
-                if parts[0] == icao.upper():
-                    lat = parts[9]
-                    return lat
-    elif len(id) == 5: # Fixes have a 5 letter identifier
-        navaid = id
-        with open(fixes, "r") as file:
-            next(file)
-            for line in file:
-                parts = line.strip().split(';')
-                if parts[0] == navaid.upper():
-                    lat = parts[1]
-                    # A formula converting DMS (Degrees, Minutes, Seconds) to DD (Decimal Degrees) format, because in the fixes_short.csv, coordinates are provided like that
-                    prefix = '-' if lat[0] == 'S' else ''
-                    deg = lat[1:3]
-                    min = lat[3:5]
-                    sec = lat[5:7]
-                    dec_deg = int(deg) + int(min)/60 + int(sec)/3600
-                    lat_dec_deg = f"{prefix}{dec_deg}"
-                    return lat_dec_deg
-                else:
-                    continue
-    else:
-        print("Please enter a 4 letter ICAO or a 5 letter NAVAID!\nNOTE: THE PROGRAM WORKS FOR EUROPEAN ROUTES ONLY!")
+airports_file = "airports_short.csv"
+fixes_file = "fixes_short.csv"
+routes_file = "routes.csv"
 
-# endregion
-# region Fetch longitude of airports/navaids
-def long(id):
-    if len(id) == 4: # Airports have a 4 letter identifier (luckily that's an easy difference to spot lets goo)
-        icao = id
-        with open(airports, "r") as file:
-            next(file)
-            for line in file:
-                parts = line.strip().split(';')
-                if parts[0] == icao.upper():
-                    long = parts[10]
-                    return long
-    elif len(id) == 5: # Fixes have a 5 letter identifier
-        navaid = id
-        with open(fixes, "r") as file:
-            next(file)
-            for line in file:
-                parts = line.strip().split(';')
-                if parts[0] == navaid.upper():
-                    long = parts[2]
-                    # A formula converting DMS (Degrees, Minutes, Seconds) to DD (Decimal Degrees) format, because in the fixes_short.csv, coordinates are provided like that
-                    prefix = '-' if long[0] == 'W' else ''
-                    deg = long[1:4]
-                    min = long[4:6]
-                    sec = long[6:8]
-                    dec_deg = int(deg) + int(min)/60 + int(sec)/3600
-                    long_dec_deg = f"{prefix}{dec_deg}"
-                    return long_dec_deg
-    else:
-        print("CoordinateError: An invalid ICAO/NAVAID was provided, or its coordinates cannot be called.")
-# endregion
-
-EARTH_RADIUS_KM = 6371.0088
-
-# Distance calculation with haversine formula (original name: haversine_distance_wgs84)
-def haversine(lat1, lon1, lat2, lon2):
-    """
-    Calculates the great-circle distance between two points 
-    (given in decimal degrees) on the surface of the Earth using 
-    the Haversine formula with the WGS-84 mean radius.
-    
-    This is a simplification that is highly accurate for distances 
-    up to a few hundred kilometers and provides a good compromise 
-    on the Pico W.
-    """
-    try:
-        # 1. Convert latitude and longitude from degrees to radians
-        lat1_rad, lon1_rad = math.radians(float(lat1)), math.radians(float(lon1))
-        lat2_rad, lon2_rad = math.radians(float(lat2)), math.radians(float(lon2))
-
-        # 2. Calculate the difference in latitudes and longitudes
-        dlat, dlon = lat2_rad - lat1_rad, lon2_rad - lon1_rad
-
-        # 3. Apply the Haversine formula components:
-        
-        # Haversine part (a)
-        a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
-        
-        # Angular distance part (c) = 2 * atan2(math.sqrt(a), math.sqrt(1 - a))
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        
-        # 4. Calculate the distance (Distance = Radius * c)
-        distance = EARTH_RADIUS_KM * c
-        
-        return distance   
-    except:
-        print("DistError: Distance cannot be calculated with the Haversine formula.\nCheck provided latitude and longitude data!")
-
-# One list will store all the routes, each list element is a route
+# Global lists to store processed route data for UART/External comms
 default_routes = []
-
-# region Storing default route elements
-with open(routes, "r") as file:
-    next(file)
-    for line in file:
-        current_route = [p for p in line.strip().split(';') if p.isalpha()]
-        if current_route:
-            default_routes.append(current_route)
-print("Default routes stored!")
-# endregion
-
-deps = [r[0] for r in default_routes] # List for all departure airports
-arrs = [r[-1] for r in default_routes] # List for all arrival airports
-
-# region Creating efficient routes
 optimised_routes = []
-for i in range(len(deps)):
-    # Initially
-    A = deps[i] # A point is departure airport
-    B = arrs[i] # B point is arrival airport with same index
-    print(f"Optimising route {i}/{len(deps)}...")
-    a_lat, a_lon = lat(A), long(A)
-    b_lat, b_lon = lat(B), long(B)
-    
-    if a_lat is None or b_lat is None:
-        print(f"Skipping route {A}-{B}: Coordinates not found.")
-        continue
-    
-    # Filter candidates into mem to avoid repeated file reading
-    # considering points which are closer to the destination than the start
-    total_dist = haversine(a_lat, a_lon, b_lat, b_lon)
-    candidates = []
-    
-    with open(fixes, "r") as file:
-        next(file)
-        for line in file:
-            parts = line.strip().split(';')
-            p = parts[0]
-            if len(p) == 5:
-                lat_str, lon_str = parts[1], parts[2]
-                
-                # lat
-                lat_prefix = '-' if lat_str[0] == 'W' else ''
-                p_lat = float(lat_prefix + str(int(lat_str[1:3]) + int(lat_str[3:5])/60 + int(lat_str[5:7])/3600))
 
-                # long
-                lon_prefix = '-' if lon_str[0] == 'W' else ''
-                p_lon = float(lon_prefix + str(int(lon_str[1:4]) + int(lon_str[4:6])/60 + int(lon_str[6:8])/3600))
+def vincenty_distance(coord1, coord2):
+    """Calculates geodesic distance (Vincenty). Accurate for Pico."""
+    if not coord1 or not coord2 or None in coord1 or None in coord2:
+        return 0.0
+    if (coord1[0] == 0 and coord1[1] == 0) or (coord2[0] == 0 and coord2[1] == 0):
+        return 0.0
+
+    lat1, lon1 = math.radians(coord1[0]), math.radians(coord1[1])
+    lat2, lon2 = math.radians(coord2[0]), math.radians(coord2[1])
+
+    a = 6378137.0
+    f = 1 / 298.257223563
+    b = (1 - f) * a
+
+    L = lon2 - lon1
+    U1 = math.atan((1 - f) * math.tan(lat1))
+    U2 = math.atan((1 - f) * math.tan(lat2))
+    sinU1, cosU1 = math.sin(U1), math.cos(U1)
+    sinU2, cosU2 = math.sin(U2), math.cos(U2)
+
+    lambda_lon = L
+    for _ in range(8): # Sufficient iterations for local navigation
+        sin_lambda, cos_lambda = math.sin(lambda_lon), math.cos(lambda_lon)
+        sin_sigma = math.sqrt((cosU2 * sin_lambda)**2 + (cosU1 * sinU2 - sinU1 * cosU2 * cos_lambda)**2)
+        if sin_sigma == 0: return 0.0
+        cos_sigma = sinU1 * sinU2 + cosU1 * cosU2 * cos_lambda
+        sigma = math.atan2(sin_sigma, cos_sigma)
+        sin_alpha = cosU1 * cosU2 * sin_lambda / sin_sigma
+        cos2_alpha = 1 - sin_alpha**2
+        cos2_sigma_m = cos_sigma - 2 * sinU1 * sinU2 / cos2_alpha if cos2_alpha != 0 else 0
+        C = f / 16 * cos2_alpha * (4 + f * (4 - 3 * cos2_alpha))
+        lambda_prev = lambda_lon
+        lambda_lon = L + (1 - C) * f * sin_alpha * (sigma + C * sin_sigma * (cos2_sigma_m + C * cos_sigma * (-1 + 2 * cos2_sigma_m**2)))
+        if abs(lambda_lon - lambda_prev) < 1e-9: break
+
+    u2 = cos2_alpha * (a**2 - b**2) / b**2
+    A = 1 + u2 / 16384 * (4096 + u2 * (-768 + u2 * (320 - 175 * u2)))
+    B = u2 / 1024 * (256 + u2 * (-128 + u2 * (74 - 47 * u2)))
+    delta_sigma = B * sin_sigma * (cos2_sigma_m + B / 4 * (cos_sigma * (-1 + 2 * cos2_sigma_m**2) - B / 6 * cos2_sigma_m * (-3 + 4 * sin_sigma**2) * (-3 + 4 * cos2_sigma_m**2)))
+    
+    return (b * A * (sigma - delta_sigma)) / 1000.0
+
+def parse_fix_coords(l_val, n_val):
+    """Converts DMS string formats from fixes_short.csv to Decimal Degrees."""
+    try:
+        l_prefix = -1 if l_val[0] == 'S' else 1
+        lat = l_prefix * (int(l_val[1:3]) + int(l_val[3:5])/60 + int(l_val[5:7])/3600)
+        n_prefix = -1 if n_val[0] == 'W' else 1
+        lon = n_prefix * (int(n_val[1:4]) + int(n_val[4:6])/60 + int(n_val[6:8])/3600)
+        return lat, lon
+    except:
+        return None
+
+def get_point(id_to_find):
+    """Locates point in CSVs without loading the whole file into RAM."""
+    id_to_find = id_to_find.upper().strip()
+    # Check Airports
+    try:
+        with open(airports_file, "r") as f:
+            next(f)
+            for line in f:
+                if line.startswith(id_to_find + ";"):
+                    parts = line.strip().split(';')
+                    return (float(parts[9]), float(parts[10]))
+        # Check Fixes
+        with open(fixes_file, "r") as f:
+            next(f)
+            for line in f:
+                if line.startswith(id_to_find + ";"):
+                    parts = line.strip().split(';')
+                    return parse_fix_coords(parts[1], parts[2])
+    except:
+        pass
+    return None
+
+def find_optimised_route(start_id, arr_id):
+    """
+    Finds a route that balances efficiency and waypoint count.
+    Dynamically limits waypoints based on distance to prevent unnecessary turns.
+    """
+    start_pt = get_point(start_id)
+    arr_pt = get_point(arr_id)
+    if not start_pt or not arr_pt: return [start_id, arr_id]
+
+    route = [start_id]
+    curr_pt = start_pt
+    direct_dist = vincenty_distance(start_pt, arr_pt)
+    
+    # Adaptive limit: 1 waypoint per 100km, min 2, max 6 (total 8 points)
+    max_waypoints = max(2, min(6, int(direct_dist / 100)))
+    
+    for _ in range(max_waypoints): 
+        curr_to_dest = vincenty_distance(curr_pt, arr_pt)
+        
+        # Stop adding waypoints if we are close or if direct flight is already short
+        if curr_to_dest < 60: break 
+        
+        best_fix_id = None
+        best_fix_pt = None
+        best_score = 999999.0
+        
+        # Determine the "sweet spot" for the next waypoint distance
+        min_step = direct_dist * 0.12
+        max_step = direct_dist * 0.30
+
+        with open(fixes_file, "r") as f:
+            next(f)
+            for line in f:
+                parts = line.split(';')
+                p_id = parts[0]
+                if len(p_id) != 5 or p_id in route: continue
                 
-                # check if point is within the bounding sphere of the route
-                dist_to_b = haversine(p_lat, p_lon, b_lat, b_lon)
-                if dist_to_b < total_dist:
-                    candidates.append({'id': p, 'lat': p_lat, 'lon': p_lon, 'dist_b': dist_to_b})
-                    
-    # Building the route
-    current_route = [A]
-    curr_lat, curr_lon = float(a_lat), float(a_lon)
-    
-    while True:
-        best_next = None
-        min_step_dist = 999999
-        
-        curr_dist_to_dest = haversine(curr_lat, curr_lon, b_lat, b_lon)
-        
-        for p in candidates:
-            if p['id'] in current_route: continue
-            
-            if p['dist_b'] < curr_dist_to_dest:
-                step_dist = haversine(curr_lat, curr_lon, p['lat'], p['lon'])
-                if step_dist < min_step_dist:
-                    min_step_dist = step_dist
-                    best_next = p
-        
-        if not best_next or min_step_dist > curr_dist_to_dest:
+                p_pt = parse_fix_coords(parts[1], parts[2])
+                if not p_pt: continue
+                
+                dist_from_curr = vincenty_distance(curr_pt, p_pt)
+                
+                # Governor: Only look at points roughly in the right direction/distance
+                if dist_from_curr < min_step or dist_from_curr > max_step: continue
+                
+                dist_to_arr = vincenty_distance(p_pt, arr_pt)
+                
+                # Strict check: Does this point actually improve the route or keep it tight?
+                if (dist_from_curr + dist_to_arr) > (curr_to_dest * 1.01): continue
+                if dist_to_arr >= curr_to_dest: continue 
+                
+                # Scoring: Penalty for deviating from the straight line
+                penalty = (dist_from_curr + dist_to_arr) - curr_to_dest
+                score = dist_from_curr + (penalty * 6.0) # Heavier penalty for deviations
+                
+                if score < best_score:
+                    best_score = score
+                    best_fix_id = p_id
+                    best_fix_pt = p_pt
+
+        if best_fix_id:
+            route.append(best_fix_id)
+            curr_pt = best_fix_pt
+            gc.collect()
+        else:
             break
-        current_route.append(best_next['id'])
-        curr_lat, curr_lon = best_next['lat'], best_next['lon']
-    current_route.append(B)
+            
+    route.append(arr_id)
+    return route
+
+def get_route_km(r):
+    total = 0.0
+    for i in range(len(r)-1):
+        p1 = get_point(r[i])
+        p2 = get_point(r[i+1])
+        total += vincenty_distance(p1, p2)
+    return total
+
+# --- Initialization and UI Loop ---
+
+print("Optimizing routes...")
+try:
+    with open(routes_file, "r") as f:
+        next(f)
+        for line in f:
+            r = [p.strip() for p in line.strip().split(';') if p.strip()]
+            if len(r) < 2: continue
+            
+            # Store default route
+            default_routes.append(r)
+            
+            # Process and store optimized route
+            opt = find_optimised_route(r[0], r[-1])
+            
+            # Final Guard: Ensure optimization isn't actually worse than default
+            d_orig = get_route_km(r)
+            d_opt = get_route_km(opt)
+            if d_opt > d_orig:
+                opt = [r[0], r[-1]]
+                
+            optimised_routes.append(opt)
+            print(f"Route {len(optimised_routes)}: {r[0]}->{r[-1]} ({len(opt)} pts)")
+            gc.collect()
+except Exception as e:
+    print(f"Error during initialization: {e}")
+
+while True:
+    print("\nSelect route (1-" + str(len(default_routes)) + ") or 'q':")
+    cmd = input().strip().lower()
+    if cmd == 'q': break
+    try:
+        idx = int(cmd) - 1
+        orig, opt = default_routes[idx], optimised_routes[idx]
+        d_orig, d_opt = get_route_km(orig), get_route_km(opt)
+
+        print("-" * 20)
+        print(f"ORIGINAL ({len(orig)} pts): {d_orig:.2f} km\n{' -> '.join(orig)}")
+        print(f"OPTIMISED ({len(opt)} pts): {d_opt:.2f} km\n{' -> '.join(opt)}")
+        print(f"SAVED: {d_orig - d_opt:.2f} km")
+        print("-" * 20)
         
-    optimised_routes.append(current_route)
-    print(f"Route {i+1} optimised:{' -> '.join(current_route)}")
-    
-# endregion
+        # Note: You can now access default_routes[idx] and optimised_routes[idx]
+        # here to send data via UART to your Arduino.
+    except: pass
+    gc.collect()
