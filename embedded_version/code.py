@@ -1,5 +1,8 @@
 import math
 import gc
+import busio
+import time
+import board
 
 # region BACKEND
 
@@ -197,7 +200,9 @@ try:
             gc.collect()
 except Exception as e:
     print(f"Error during initialization: {e}")
+    
 
+"""
 while True:
     print("\nSelect route (1-" + str(len(default_routes)) + ") or 'q':")
     cmd = input().strip().lower()
@@ -217,3 +222,16 @@ while True:
         # here to send data via UART to your Arduino.
     except: pass
     gc.collect()
+"""
+UART = busio.UART(board.GP16, board.GP17, baudrate=9600, timeout=1)
+default_routes = default_routes # just to know the list names, and for everything to be at one place
+optimised_routes = optimised_routes
+
+for i, route in enumerate(optimised_routes):
+    for index, wp in enumerate(route):
+        if index != len(route)-1:
+            UART.write(f"{wp},".encode('ASCII'))
+        else:
+            UART.write(f"{wp};".encode('ASCII'))
+        time.sleep(0.1)
+    UART.write("\n".encode('ASCII'))
