@@ -20,12 +20,6 @@ routes_file = "routes.csv"
 default_routes = []
 optimised_routes = []
 
-default_routes_distances = []
-optimised_routes_distances = []
-
-default_routes_waypointCounts = []
-optimised_routes_waypointCounts = []
-
 def vincenty_distance(coord1, coord2):
     """Calculates geodesic distance (Vincenty). Accurate for Pico."""
     if not coord1 or not coord2 or None in coord1 or None in coord2:
@@ -194,17 +188,11 @@ try:
             
             # Process and store optimized route
             opt = find_optimised_route(r[0], r[-1])
-            optimised_routes_waypointCounts.append(len(opt))
             
             # Final Guard: Ensure optimization isn't actually worse than default
             d_orig = get_route_km(r)
-            default_routes_distances.append(d_orig)
-
             d_opt = get_route_km(opt)
-            optimised_routes_distances.append(d_opt)
-
             if d_opt > d_orig:
-                print(f"Couldn't optimise route {r[0]}-{r[-1]}.")
                 opt = [r[0], r[-1]]
                 
             optimised_routes.append(opt)
@@ -213,11 +201,7 @@ try:
 except Exception as e:
     print(f"Error during initialization: {e}")
     
-for route in default_routes:
-    wpcount = 0;
-    for wp in route:
-        wpcount += 1
-    default_routes_waypointCounts.append(wpcount)
+
 """
 while True:
     print("\nSelect route (1-" + str(len(default_routes)) + ") or 'q':")
@@ -240,17 +224,9 @@ while True:
     gc.collect()
 """
 UART = busio.UART(board.GP16, board.GP17, baudrate=9600, timeout=1)
-
-
 default_routes = default_routes # just to know the list names, and for everything to be at one place
 optimised_routes = optimised_routes
 
-default_routes_distances = default_routes_distances
-optimised_routes_distances = optimised_routes_distances
-
-default_routes_waypointCounts = default_routes_waypointCounts
-optimised_routes_waypointCounts = optimised_routes_waypointCounts
-"""
 for i, route in enumerate(optimised_routes):
     for index, wp in enumerate(route):
         if index != len(route)-1:
@@ -259,10 +235,3 @@ for i, route in enumerate(optimised_routes):
             UART.write(f"{wp};".encode('ASCII'))
         time.sleep(0.1)
     UART.write("\n".encode('ASCII'))
-"""
-
-for i, distance in enumerate(default_routes_distances):
-    if i != len(default_routes_distances):
-        UART.write(f"{distance:.2f},".encode('ASCII'))
-    else:
-        UART.write(f"{distance:.2f}|".encode('ASCII'))
