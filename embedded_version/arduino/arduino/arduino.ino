@@ -3,42 +3,115 @@
 #include <LiquidCrystal_I2C.h>
 
 LiquidCrystal_I2C lcd(0x27, 20, 4); 
-SoftwareSerial mySerial(10, 11);
+SoftwareSerial picoSerial(10, 11);
 
-String tempdata;
-String route;
-String default_routes[5]; // maximum number of routes is 5
+const int max_route_num = 5;
+
+int def_distances[max_route_num];
+int opt_distances[max_route_num];
+int def_waypointCounts[max_route_num];
+int opt_waypointCounts[max_route_num];
+
+
+String temp_saved;
+String ddist;
+String odist;
+
+String dwpcounts;
+String owpcounts;
+
+bool initialisation = true;
+bool comm_over = false;
+
+int pages = 0;
+int current_page = 0;
+bool lastRight = HIGH;
+bool lastMode = HIGH;
+bool lastLeft = HIGH;
 
 void setup() {
-  lcd.init();   
+  pinMode(1, INPUT_PULLUP); // button 1 - left
+  pinMode(2, INPUT_PULLUP); // button 2 - mode
+  pinMode(3, INPUT_PULLUP); // button 3 - right
+
+  lcd.init();
   lcd.backlight();
   Serial.begin(9600);
-  mySerial.begin(9600);  
-  
-  lcd.setCursor(0,0);
-  lcd.print("Waiting for data...");
+  picoSerial.begin(9600);
+
+  lcd.setCursor(0,0); // col, row
+  lcd.print("Press the middle");
+  lcd.setCursor(0,1);
+  lcd.print("button to start!");
 }
 
-void loop(){
-  int byte = mySerial.read();
-  char c = (char)byte;
-  if (c == ','){
-    String current_string = tempdata;
-    tempdata = "";
-    route += current_string;
-    route += "->";
+void loop() {
+  int left_state = digitalRead(1);
+  int mode_state = digitalRead(2);
+  int right_state = digitalRead(3);
 
-  } else if (c == '\n'){
-    String current_string = tempdata;
-    tempdata = "";
-    route += current_string;
-    default_routes.push_back(route);
-    route = "";
-  } else {
-    tempdata += c;
+  while (initialisation == true){
+    int mode_state = digitalRead(2);
+    if (mode_state == LOW && lastMode == HIGH){
+      lcd.clear();
+      lcd.setCursor(0,0);
+      lcd.print("Waiting for data...");
+      picoSerial.println("@");
+      initialisation = false;
+      
+    }
+    lastMode = mode_state;
+  }
+  
+
+  while (picoSerial.available() > 0){
+    int data = picoSerial.read();
+    char c = char(data);
+
+    if (c == '@') {
+      ddist = picoSerial.readStringUntil('\n').trim();
+    } else if (c == '{') {
+      odist = picoSerial.readStringUntil('\n').trim();
+    } else if (c == '}') {
+      dwpcounts = picoSerial.readStringUntil('\n').trim();
+    } else if (c == '-') {
+      owpcounts = picoSerial.readStringUntil('\n').trim();
+      comm_over = true;
+    }
   }
 
-  
-  
+
+
+
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
